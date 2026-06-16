@@ -73,8 +73,10 @@ def test_api_error_is_clean_e2e(stub_server):
     assert result.exit_code == 1
     output = result.stdout + (result.stderr or "")
     assert "Traceback" not in output
-    # Сообщение из тела ошибки дошло до пользователя (сквозь _extract_error_message).
-    assert "unknown path" in output or "404" in output
+    # Текст из ТЕЛА ошибки дошёл до пользователя — это проверяет именно
+    # _extract_error_message (без escape-hatch на "404", который и так всегда
+    # есть в "HTTP 404: ..."; иначе путь извлечения текста остался бы непокрыт).
+    assert "unknown path" in output
 
 
 def test_post_command_reaches_server_e2e(stub_server):
