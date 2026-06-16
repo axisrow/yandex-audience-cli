@@ -7,7 +7,9 @@
 # и пиксели НЕ затрагиваются — операции update/delete/grant идут ТОЛЬКО по id,
 # созданным в этом прогоне. Все тестовые объекты помечаются префиксом "SMOKE yac".
 #
-# Токен берётся из .env (YANDEX_AUDIENCE_TOKEN); боевой base-url (не переопределяется).
+# Из .env берётся ТОЛЬКО токен (YANDEX_AUDIENCE_TOKEN). Боевой base-url зашит в скрипте
+# и пробрасывается явно через --base-url; YANDEX_AUDIENCE_BASE_URL из окружения/.env
+# игнорируется — токен не может уйти на чужой хост, прогон всегда бьёт в боевой Audience.
 # ВСЁ — на своих данных: скрипт не принимает чужие id и ничего не хардкодит. Команды,
 # которым нужен внешний ресурс (metrika/appmetrica/client-id) или зрелый сегмент
 # (reprocess/modify-data), гоняются с заведомо невалидными/свежими данными и ОЖИДАЮТ
@@ -28,13 +30,24 @@ if [ ! -f "$ENV_FILE" ]; then
   echo "ОШИБКА: нет $ENV_FILE — положи туда YANDEX_AUDIENCE_TOKEN." >&2
   exit 1
 fi
-# shellcheck disable=SC2046
-export $(grep -v '^#' "$ENV_FILE" | grep -E '^[A-Z_]+=' | xargs)
+# Грузим из .env ТОЛЬКО токен (а не bulk-export всех переменных): иначе строка
+# YANDEX_AUDIENCE_BASE_URL=… в .env молча увела бы запросы (и OAuth-токен!) на чужой
+# хост. Читаем построчно (без xargs — он ломает значения с пробелами/кавычками).
+YANDEX_AUDIENCE_TOKEN="$(
+  grep -E '^YANDEX_AUDIENCE_TOKEN=' "$ENV_FILE" | tail -1 | cut -d= -f2- \
+    | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e 's/^"\(.*\)"$/\1/' -e "s/^'\(.*\)'$/\1/"
+)"
+export YANDEX_AUDIENCE_TOKEN
+# Боевой URL фиксируем явно и НЕ берём из окружения/.env — пробрасываем --base-url
+# в каждый вызов yac (см. run_json). Любой YANDEX_AUDIENCE_BASE_URL из среды игнорируем.
+unset YANDEX_AUDIENCE_BASE_URL
+BASE_URL="https://api-audience.yandex.ru"
 if [ -z "${YANDEX_AUDIENCE_TOKEN:-}" ]; then
-  echo "ОШИБКА: YANDEX_AUDIENCE_TOKEN пуст в .env." >&2
+  echo "ОШИБКА: YANDEX_AUDIENCE_TOKEN пуст/не найден в .env." >&2
   exit 1
 fi
 echo "Токен загружен: длина ${#YANDEX_AUDIENCE_TOKEN}, префикс ${YANDEX_AUDIENCE_TOKEN:0:3}… (значение скрыто)"
+echo "Боевой base-url зафиксирован: $BASE_URL"
 
 TS="$(date +%s)"
 FAKE_LOGIN="smoke-nonexistent-${TS}@yandex.ru"
@@ -60,7 +73,7 @@ cleanup_all() {
   local i
   for (( i=${#SEG_IDS[@]}-1; i>=0; i-- )); do
     local sid="${SEG_IDS[$i]}"
-    if yac segments delete "$sid" >/dev/null 2>&1; then
+    if yac --base-url "$BASE_URL" segments delete "$sid" >/dev/null 2>&1; then
       echo "  segment $sid удалён"
     else
       echo "  segment $sid — уже удалён/не удалось (ок)"
@@ -68,7 +81,7 @@ cleanup_all() {
   done
   for (( i=${#PIXEL_IDS[@]}-1; i>=0; i-- )); do
     local pid="${PIXEL_IDS[$i]}"
-    if yac pixels delete "$pid" >/dev/null 2>&1; then
+    if yac --base-url "$BASE_URL" pixels delete "$pid" >/dev/null 2>&1; then
       echo "  pixel $pid удалён"
     else
       echo "  pixel $pid — уже удалён/не удалось (ок)"
@@ -79,10 +92,12 @@ cleanup_all() {
 trap cleanup_all EXIT
 
 # --- хелперы прогона ----------------------------------------------------------
-# Гоняет `yac --output json <args>`; печатает компактно; кладёт stdout в LAST_OUT, код в LAST_RC.
+# Гоняет `yac --base-url <боевой> --output json <args>`; кладёт stdout в LAST_OUT, код
+# в LAST_RC. base-url пробрасывается ЯВНО (не из .env/окружения) — гарантия, что запросы
+# и токен идут только на боевой Audience.
 LAST_OUT=""; LAST_RC=0
 run_json() {
-  LAST_OUT="$(yac --output json "$@" 2>&1)"; LAST_RC=$?
+  LAST_OUT="$(yac --base-url "$BASE_URL" --output json "$@" 2>&1)"; LAST_RC=$?
   return 0
 }
 
@@ -142,10 +157,10 @@ create_or_err() {
     else
       _fail "$desc" "успех, но нет id: $(head -c 200 <<<"$LAST_OUT")"
     fi
-  elif grep -q "Ошибка:" <<<"$LAST_OUT" && ! grep -q "Traceback" <<<"$LAST_OUT"; then
+  elif is_api_error; then
     _ok "$desc (ожидаемая ошибка API)"
   else
-    _fail "$desc" "exit=$LAST_RC, нет чистого 'Ошибка:' / traceback: $(head -c 200 <<<"$LAST_OUT")"
+    _fail "$desc" "exit=$LAST_RC, это не отказ API (сеть/traceback?): $(head -c 200 <<<"$LAST_OUT")"
   fi
 }
 
@@ -165,6 +180,16 @@ make_data_file() {
   fi
 }
 
+# is_api_error — был ли последний вывод ОТКЛОНЕНИЕМ API (а не сетевым сбоем/трейсбеком).
+# yac рендерит ошибки как "Ошибка: HTTP <код>: …" (отказ API) либо "Ошибка: Сетевая
+# ошибка: …" (транспорт). Засчитываем ожидаемой только первое — иначе обрыв сети дал бы
+# вакуумный PASS там, где запрос вообще не дошёл до API.
+is_api_error() {
+  grep -q "HTTP [0-9]" <<<"$LAST_OUT" \
+    && ! grep -q "Сетевая ошибка" <<<"$LAST_OUT" \
+    && ! grep -q "Traceback" <<<"$LAST_OUT"
+}
+
 # expect_ok "<desc>" <yac args...>
 expect_ok() {
   local desc="$1"; shift
@@ -172,16 +197,17 @@ expect_ok() {
   if [ "$LAST_RC" -eq 0 ]; then _ok "$desc"; else _fail "$desc" "exit=$LAST_RC: $(head -c 200 <<<"$LAST_OUT")"; fi
 }
 
-# expect_err "<desc>" <yac args...> — PASS, если код != 0 И вывод содержит "Ошибка:" (а не traceback)
+# expect_err "<desc>" <yac args...> — PASS, если код != 0 И это ОТКАЗ API (HTTP-ошибка),
+# а не сетевой сбой/traceback.
 expect_err() {
   local desc="$1"; shift
   run_json "$@"
-  if [ "$LAST_RC" -ne 0 ] && grep -q "Ошибка:" <<<"$LAST_OUT" && ! grep -q "Traceback" <<<"$LAST_OUT"; then
+  if [ "$LAST_RC" -ne 0 ] && is_api_error; then
     _ok "$desc (ожидаемая ошибка API)"
   elif [ "$LAST_RC" -eq 0 ]; then
     _fail "$desc" "ожидалась ошибка, но команда успешна"
   else
-    _fail "$desc" "exit=$LAST_RC, но нет чистого 'Ошибка:' / есть traceback: $(head -c 200 <<<"$LAST_OUT")"
+    _fail "$desc" "exit=$LAST_RC, но это не отказ API (сеть/traceback?): $(head -c 200 <<<"$LAST_OUT")"
   fi
 }
 
