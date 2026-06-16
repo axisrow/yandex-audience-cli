@@ -211,11 +211,17 @@ expect_err() {
   fi
 }
 
-# expect_any "<desc>" <yac args...> — любой исход без traceback засчитывается (нечего удалять и т.п.)
+# expect_any "<desc>" <yac args...> — для идемпотентных операций, где допустим и успех,
+# и отказ API (напр. remove того, чего нет). PASS только если запрос реально дошёл до API:
+# успех (rc==0) ИЛИ отказ API (is_api_error). Сетевой сбой/traceback → FAIL (не вакуум).
 expect_any() {
   local desc="$1"; shift
   run_json "$@"
-  if grep -q "Traceback" <<<"$LAST_OUT"; then _fail "$desc" "traceback: $(head -c 200 <<<"$LAST_OUT")"; else _ok "$desc (exit=$LAST_RC, допустимо)"; fi
+  if [ "$LAST_RC" -eq 0 ] || is_api_error; then
+    _ok "$desc (exit=$LAST_RC, допустимо)"
+  else
+    _fail "$desc" "не дошло до API (сеть/traceback?): $(head -c 200 <<<"$LAST_OUT")"
+  fi
 }
 
 phase() { echo ""; echo "${B}══ $1 ══${N}"; }
