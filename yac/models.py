@@ -34,6 +34,7 @@ def _from_dict(cls, data: dict) -> Any:
 
 # --- сегменты --------------------------------------------------------------
 
+
 @dataclass
 class BaseSegment:
     """Поля, общие для всех типов сегментов."""
@@ -113,6 +114,7 @@ class UploadingSegment(BaseSegment):
 
 
 # --- прочие ресурсы --------------------------------------------------------
+
 
 @dataclass
 class Grant:

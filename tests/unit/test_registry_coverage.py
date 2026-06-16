@@ -41,7 +41,6 @@ RESOURCE_BY_GROUP = {
 }
 
 
-
 def test_total_endpoint_count():
     assert len(registry.ENDPOINTS) == EXPECTED_TOTAL
 
@@ -68,9 +67,9 @@ def test_methods_and_paths_well_formed():
 @pytest.mark.parametrize("ep", registry.ENDPOINTS, ids=lambda e: f"{e.group}.{e.op}")
 def test_every_endpoint_has_resource_method(ep):
     resource_cls = RESOURCE_BY_GROUP[ep.group]
-    assert callable(getattr(resource_cls, ep.op, None)), (
-        f"Нет метода ресурса {resource_cls.__name__}.{ep.op}"
-    )
+    assert callable(
+        getattr(resource_cls, ep.op, None)
+    ), f"Нет метода ресурса {resource_cls.__name__}.{ep.op}"
 
 
 def _group_command_names(group: str) -> set:

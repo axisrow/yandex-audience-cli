@@ -50,7 +50,9 @@ class Segments(Resource):
         return self._call("create_geo", json={"segment": segment}, pretty=pretty)
 
     def create_geo_polygon(self, segment: dict, *, pretty: bool = False) -> Any:
-        return self._call("create_geo_polygon", json={"segment": segment}, pretty=pretty)
+        return self._call(
+            "create_geo_polygon", json={"segment": segment}, pretty=pretty
+        )
 
     # -- загрузка файлов ----------------------------------------------------
     def upload_file(self, file_path: str, *, pretty: bool = False) -> Any:
@@ -66,7 +68,9 @@ class Segments(Resource):
             return self._call(op, files=files, pretty=pretty)
 
     # -- изменение координат гео-окружности --------------------------------
-    def update_geo_points(self, segment_id: int, points: list, *, pretty: bool = False) -> Any:
+    def update_geo_points(
+        self, segment_id: int, points: list, *, pretty: bool = False
+    ) -> Any:
         return self._call(
             "update_geo_points", id=segment_id, json={"points": points}, pretty=pretty
         )
@@ -100,19 +104,29 @@ class Segments(Resource):
         check_size: Optional[bool] = None,
         pretty: bool = False,
     ) -> Any:
-        params = {"check_size": str(check_size).lower()} if check_size is not None else None
+        params = (
+            {"check_size": str(check_size).lower()} if check_size is not None else None
+        )
         return self._call(
-            "confirm", id=segment_id, params=params, json={"segment": segment}, pretty=pretty
+            "confirm",
+            id=segment_id,
+            params=params,
+            json={"segment": segment},
+            pretty=pretty,
         )
 
-    def confirm_client_id(self, segment_id: int, segment: dict, *, pretty: bool = False) -> Any:
+    def confirm_client_id(
+        self, segment_id: int, segment: dict, *, pretty: bool = False
+    ) -> Any:
         return self._call(
             "confirm_client_id", id=segment_id, json={"segment": segment}, pretty=pretty
         )
 
     # -- изменение / удаление / переобработка ------------------------------
     def update(self, segment_id: int, segment: dict, *, pretty: bool = False) -> Any:
-        return self._call("update", id=segment_id, json={"segment": segment}, pretty=pretty)
+        return self._call(
+            "update", id=segment_id, json={"segment": segment}, pretty=pretty
+        )
 
     def delete(self, segment_id: int, *, pretty: bool = False) -> Any:
         return self._call("delete", id=segment_id, pretty=pretty)

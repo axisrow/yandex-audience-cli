@@ -10,7 +10,9 @@ from ..api.delegates import Delegates
 from ..render import render
 from ..context import get_state, handle_errors
 
-app = typer.Typer(help="Управление представителями (3 эндпоинта).", no_args_is_help=True)
+app = typer.Typer(
+    help="Управление представителями (3 эндпоинта).", no_args_is_help=True
+)
 
 
 def _delegates(ctx: typer.Context) -> Delegates:
@@ -33,11 +35,18 @@ def add(
     comment: Optional[str] = typer.Option(None, "--comment"),
 ) -> None:
     """Добавить представителя."""
-    render(ctx, _delegates(ctx).add(user_login, perm=perm, comment=comment, pretty=get_state(ctx).pretty))
+    render(
+        ctx,
+        _delegates(ctx).add(
+            user_login, perm=perm, comment=comment, pretty=get_state(ctx).pretty
+        ),
+    )
 
 
 @app.command("remove")
 @handle_errors
-def remove(ctx: typer.Context, user_login: str = typer.Option(..., "--user-login")) -> None:
+def remove(
+    ctx: typer.Context, user_login: str = typer.Option(..., "--user-login")
+) -> None:
     """Удалить представителя."""
     render(ctx, _delegates(ctx).remove(user_login, pretty=get_state(ctx).pretty))

@@ -8,7 +8,9 @@ from ..api.accounts import Accounts
 from ..render import render
 from ..context import get_state, handle_errors
 
-app = typer.Typer(help="Аккаунты, где вы — представитель (1 эндпоинт).", no_args_is_help=True)
+app = typer.Typer(
+    help="Аккаунты, где вы — представитель (1 эндпоинт).", no_args_is_help=True
+)
 
 
 @app.command("list")
