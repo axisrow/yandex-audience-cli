@@ -62,6 +62,10 @@ export YANDEX_AUDIENCE_TOKEN=<OAUTH>
 echo <OAUTH> > ~/.config/yandex-audience-cli/token
 ```
 
+Шаблон переменных — `.env.example`. `yac` не читает `.env` сам (нет `python-dotenv`);
+экспортируйте переменные вручную: `cp .env.example .env`, затем
+`set -a; . ./.env; set +a` (корректно с пробелами/кавычками; или через `direnv`).
+
 Получить OAuth-токен: https://oauth.yandex.ru/ (права: создание/чтение сегментов).
 
 ## Примеры

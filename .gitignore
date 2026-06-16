@@ -30,3 +30,7 @@ venv/
 # Секреты (токен резолвится из env или ~/.config, не из репо)
 token
 *.token
+# .env с реальными значениями — в git не коммитим (шаблон: .env.example)
+.env
+.env.*
+!.env.example

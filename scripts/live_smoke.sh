@@ -1,0 +1,376 @@
+#!/usr/bin/env bash
+#
+# live_smoke.sh — безопасный live-прогон ВСЕХ 28 эндпоинтов yac через реальный CLI.
+#
+# Принцип безопасности: скрипт сам создаёт все объекты, которые трогает, и сам их
+# удаляет (EXIT-trap подстрахует даже при падении). Существующие боевые сегменты
+# и пиксели НЕ затрагиваются — операции update/delete/grant идут ТОЛЬКО по id,
+# созданным в этом прогоне. Все тестовые объекты помечаются префиксом "SMOKE yac".
+#
+# Из .env берётся ТОЛЬКО токен (YANDEX_AUDIENCE_TOKEN). Боевой base-url зашит в скрипте
+# и пробрасывается явно через --base-url; YANDEX_AUDIENCE_BASE_URL из окружения/.env
+# игнорируется — токен не может уйти на чужой хост, прогон всегда бьёт в боевой Audience.
+# ВСЁ — на своих данных: скрипт не принимает чужие id и ничего не хардкодит. Команды,
+# которым нужен внешний ресурс (metrika/appmetrica/client-id) или зрелый сегмент
+# (reprocess/modify-data), гоняются с заведомо невалидными/свежими данными и ОЖИДАЮТ
+# ошибку API — это засчитывается как PASS (проверяем, что CLI отправил запрос и разобрал
+# ответ). Никаких env-override на существующие сегменты.
+#
+# Использование:  bash scripts/live_smoke.sh
+# Выход: 0 — все ожидаемые исходы совпали; 1 — есть FAIL.
+
+set -uo pipefail   # НЕ set -e: ожидаемые ошибки (expect_err) обрабатываем сами
+
+# --- расположение и токен -----------------------------------------------------
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+ENV_FILE="$REPO_ROOT/.env"
+
+if [ ! -f "$ENV_FILE" ]; then
+  echo "ОШИБКА: нет $ENV_FILE — положи туда YANDEX_AUDIENCE_TOKEN." >&2
+  exit 1
+fi
+# Грузим из .env ТОЛЬКО токен (а не bulk-export всех переменных): иначе строка
+# YANDEX_AUDIENCE_BASE_URL=… в .env молча увела бы запросы (и OAuth-токен!) на чужой
+# хост. Читаем построчно (без xargs — он ломает значения с пробелами/кавычками).
+YANDEX_AUDIENCE_TOKEN="$(
+  grep -E '^[[:space:]]*(export[[:space:]]+)?YANDEX_AUDIENCE_TOKEN=' "$ENV_FILE" | tail -1 | cut -d= -f2- \
+    | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e 's/^"\(.*\)"$/\1/' -e "s/^'\(.*\)'$/\1/"
+)"
+export YANDEX_AUDIENCE_TOKEN
+# Боевой URL фиксируем явно и НЕ берём из окружения/.env — пробрасываем --base-url
+# в каждый вызов yac (см. run_json). Любой YANDEX_AUDIENCE_BASE_URL из среды игнорируем.
+unset YANDEX_AUDIENCE_BASE_URL
+BASE_URL="https://api-audience.yandex.ru"
+if [ -z "${YANDEX_AUDIENCE_TOKEN:-}" ]; then
+  echo "ОШИБКА: YANDEX_AUDIENCE_TOKEN пуст/не найден в .env." >&2
+  exit 1
+fi
+echo "Токен загружен: длина ${#YANDEX_AUDIENCE_TOKEN}, префикс ${YANDEX_AUDIENCE_TOKEN:0:3}… (значение скрыто)"
+echo "Боевой base-url зафиксирован: $BASE_URL"
+
+TS="$(date +%s)"
+FAKE_LOGIN="smoke-nonexistent-${TS}@yandex.ru"
+
+# --- цвета и счётчики ---------------------------------------------------------
+if [ -t 1 ]; then G=$'\e[32m'; R=$'\e[31m'; Y=$'\e[33m'; B=$'\e[1m'; N=$'\e[0m'; else G=; R=; Y=; B=; N=; fi
+PASS=0; FAIL=0; SKIP=0
+declare -a FAILURES=()
+
+# --- трекеры созданного + cleanup-trap ----------------------------------------
+declare -a SEG_IDS=()
+declare -a PIXEL_IDS=()
+declare -a TMP_FILES=()
+
+track_seg()   { [ -n "${1:-}" ] && SEG_IDS+=("$1"); }
+track_pixel() { [ -n "${1:-}" ] && PIXEL_IDS+=("$1"); }
+track_tmp()   { [ -n "${1:-}" ] && TMP_FILES+=("$1"); }
+
+cleanup_all() {
+  echo ""
+  echo "${B}── cleanup ──${N}"
+  # сегменты — в обратном порядке (производные раньше источников)
+  local i
+  for (( i=${#SEG_IDS[@]}-1; i>=0; i-- )); do
+    local sid="${SEG_IDS[$i]}"
+    if yac --base-url "$BASE_URL" segments delete "$sid" >/dev/null 2>&1; then
+      echo "  segment $sid удалён"
+    else
+      echo "  segment $sid — уже удалён/не удалось (ок)"
+    fi
+  done
+  for (( i=${#PIXEL_IDS[@]}-1; i>=0; i-- )); do
+    local pid="${PIXEL_IDS[$i]}"
+    if yac --base-url "$BASE_URL" pixels delete "$pid" >/dev/null 2>&1; then
+      echo "  pixel $pid удалён"
+    else
+      echo "  pixel $pid — уже удалён/не удалось (ок)"
+    fi
+  done
+  for f in "${TMP_FILES[@]:-}"; do [ -n "$f" ] && rm -f "$f"; done
+}
+trap cleanup_all EXIT
+
+# --- хелперы прогона ----------------------------------------------------------
+# Гоняет `yac --base-url <боевой> --output json <args>`; кладёт stdout в LAST_OUT, код
+# в LAST_RC. base-url пробрасывается ЯВНО (не из .env/окружения) — гарантия, что запросы
+# и токен идут только на боевой Audience.
+LAST_OUT=""; LAST_RC=0
+run_json() {
+  LAST_OUT="$(yac --base-url "$BASE_URL" --output json "$@" 2>&1)"; LAST_RC=$?
+  return 0
+}
+
+# Извлечь id из LAST_OUT. $1 — путь: "segment"/"pixel" (объект {id}) ИЛИ
+# "pixels[0]"/"segments[0]" (первый элемент массива). Пусто, если не найдено.
+json_id() {
+  JSON_PATH="$1" python3 -c "
+import os,sys,json
+try: d=json.loads(sys.stdin.read())
+except Exception: sys.exit(0)
+p=os.environ['JSON_PATH']
+if p.endswith('[0]'):
+    arr=d.get(p[:-3]) if isinstance(d,dict) else None
+    o=arr[0] if isinstance(arr,list) and arr else None
+else:
+    o=d.get(p) if isinstance(d,dict) else None
+if isinstance(o,dict) and o.get('id') is not None: print(o['id'])
+" <<<"$LAST_OUT"
+}
+
+_ok()   { PASS=$((PASS+1)); printf '  %sPASS%s %s\n' "$G" "$N" "$1"; }
+_fail() { FAIL=$((FAIL+1)); FAILURES+=("$1"); printf '  %sFAIL%s %s\n' "$R" "$N" "$1"; [ -n "${2:-}" ] && printf '       %s\n' "$2"; }
+_skip() { SKIP=$((SKIP+1)); printf '  %sSKIP%s %s\n' "$Y" "$N" "$1"; }
+
+# create_and_track <segment|pixel> "<desc>" <yac args...>
+# Гоняет создающую команду, извлекает id, трекает для cleanup, печатает PASS/FAIL.
+# Результат: id в CREATED_ID (или ""), код возврата 0 при успехе.
+CREATED_ID=""
+create_and_track() {
+  local kind="$1" desc="$2"; shift 2
+  run_json "$@"
+  CREATED_ID=""
+  if [ "$LAST_RC" -ne 0 ]; then
+    _fail "$desc" "exit=$LAST_RC: $(head -c 200 <<<"$LAST_OUT")"; return 1
+  fi
+  CREATED_ID="$(json_id "$kind")"
+  if [ -z "$CREATED_ID" ]; then
+    _fail "$desc" "нет id: $(head -c 200 <<<"$LAST_OUT")"; return 1
+  fi
+  if [ "$kind" = pixel ]; then track_pixel "$CREATED_ID"; else track_seg "$CREATED_ID"; fi
+  _ok "$desc → id=$CREATED_ID"
+}
+
+# create_or_err <segment|pixel> "<desc>" <yac args...>
+# Для создающих команд, которые МОГУТ ожидаемо упасть доменной ошибкой (напр.
+# lookalike от ещё не обработанного источника). Успех → трек + PASS (id в CREATED_ID);
+# чистая ошибка API → PASS (ожидаемо); traceback → FAIL. Всё на своих данных.
+create_or_err() {
+  local kind="$1" desc="$2"; shift 2
+  run_json "$@"
+  CREATED_ID=""
+  if [ "$LAST_RC" -eq 0 ]; then
+    CREATED_ID="$(json_id "$kind")"
+    if [ -n "$CREATED_ID" ]; then
+      if [ "$kind" = pixel ]; then track_pixel "$CREATED_ID"; else track_seg "$CREATED_ID"; fi
+      _ok "$desc → id=$CREATED_ID"
+    else
+      # API сказал «успех», но id не извлёкся (форма ответа стабильна {"segment":{"id"}},
+      # так что это крайне маловероятно). Сигналим FAIL — это громче молчаливого пропуска
+      # и привлечёт внимание, если форма ответа когда-то изменится.
+      _fail "$desc" "успех, но нет id (объект мог не затрекаться!): $(head -c 200 <<<"$LAST_OUT")"
+    fi
+  elif is_api_error; then
+    _ok "$desc (ожидаемая ошибка API)"
+  else
+    _fail "$desc" "exit=$LAST_RC, это не отказ API (сеть/traceback?): $(head -c 200 <<<"$LAST_OUT")"
+  fi
+}
+
+# make_data_file <txt|csv> <count> <start_index> — создать temp-файл синтетических
+# email-данных (заголовок по типу), затрекать для удаления. Путь — в DATA_FILE
+# (НЕ через stdout/subshell, иначе track_tmp потерялся бы в subshell'е).
+DATA_FILE=""
+make_data_file() {
+  local ext="$1" count="$2" start="${3:-1}" i end
+  DATA_FILE="$(mktemp "${TMPDIR:-/tmp}/smoke_${TS}.XXXXXX")"
+  track_tmp "$DATA_FILE"
+  end=$(( start + count - 1 ))
+  if [ "$ext" = csv ]; then
+    { echo "email,age,city"; for (( i=start; i<=end; i++ )); do echo "smoke_csv_${TS}_${i}@example.com,30,Moscow"; done; } > "$DATA_FILE"
+  else
+    { echo "email"; for (( i=start; i<=end; i++ )); do echo "smoke_${TS}_${i}@example.com"; done; } > "$DATA_FILE"
+  fi
+}
+
+# is_api_error — был ли последний вывод ОТКЛОНЕНИЕМ API (а не сетевым сбоем/трейсбеком).
+# yac рендерит ошибки как "Ошибка: HTTP <код>: …" (отказ API) либо "Ошибка: Сетевая
+# ошибка: …" (транспорт). Засчитываем ожидаемой только первое — иначе обрыв сети дал бы
+# вакуумный PASS там, где запрос вообще не дошёл до API.
+is_api_error() {
+  grep -q "HTTP [0-9]" <<<"$LAST_OUT" \
+    && ! grep -q "Сетевая ошибка" <<<"$LAST_OUT" \
+    && ! grep -q "Traceback" <<<"$LAST_OUT"
+}
+
+# expect_ok "<desc>" <yac args...>
+expect_ok() {
+  local desc="$1"; shift
+  run_json "$@"
+  if [ "$LAST_RC" -eq 0 ]; then _ok "$desc"; else _fail "$desc" "exit=$LAST_RC: $(head -c 200 <<<"$LAST_OUT")"; fi
+}
+
+# expect_err "<desc>" <yac args...> — PASS, если код != 0 И это ОТКАЗ API (HTTP-ошибка),
+# а не сетевой сбой/traceback.
+expect_err() {
+  local desc="$1"; shift
+  run_json "$@"
+  if [ "$LAST_RC" -ne 0 ] && is_api_error; then
+    _ok "$desc (ожидаемая ошибка API)"
+  elif [ "$LAST_RC" -eq 0 ]; then
+    _fail "$desc" "ожидалась ошибка, но команда успешна"
+  else
+    _fail "$desc" "exit=$LAST_RC, но это не отказ API (сеть/traceback?): $(head -c 200 <<<"$LAST_OUT")"
+  fi
+}
+
+# expect_any "<desc>" <yac args...> — для идемпотентных операций, где допустим и успех,
+# и отказ API (напр. remove того, чего нет). PASS только если запрос реально дошёл до API:
+# успех (rc==0) ИЛИ отказ API (is_api_error). Сетевой сбой/traceback → FAIL (не вакуум).
+expect_any() {
+  local desc="$1"; shift
+  run_json "$@"
+  if [ "$LAST_RC" -eq 0 ] || is_api_error; then
+    _ok "$desc (exit=$LAST_RC, допустимо)"
+  else
+    _fail "$desc" "не дошло до API (сеть/traceback?): $(head -c 200 <<<"$LAST_OUT")"
+  fi
+}
+
+phase() { echo ""; echo "${B}══ $1 ══${N}"; }
+
+# =============================================================================
+# Фаза A — read-only (5)
+# =============================================================================
+phase "A. Read-only"
+expect_ok "accounts list"   accounts list
+expect_ok "delegates list"  delegates list
+expect_ok "pixels list"     pixels list
+expect_ok "segments list"   segments list
+# `segments list --pixel` — в фазе B, на пикселе, который мы сами создадим
+# (без зависимости от наличия чужих пикселей в аккаунте).
+
+# =============================================================================
+# Фаза B — пиксели: полный жизненный цикл (create/update/delete/undelete)
+# =============================================================================
+phase "B. Пиксели (жизненный цикл)"
+if create_and_track pixel "pixels create" pixels create --name "SMOKE yac pixel ${TS}"; then
+  PIX_ID="$CREATED_ID"
+  expect_ok "pixels update $PIX_ID"   pixels update "$PIX_ID" --name "SMOKE yac pixel ${TS} renamed"
+  # segments list --pixel на СВОЁМ пикселе (фаза A не зависит от чужих данных)
+  expect_ok "segments list --pixel $PIX_ID" segments list --pixel "$PIX_ID"
+  expect_ok "pixels delete $PIX_ID"   pixels delete "$PIX_ID"
+  expect_ok "pixels undelete $PIX_ID" pixels undelete "$PIX_ID"
+  # финальное удаление — в cleanup-trap (PIX_ID отслеживается)
+fi
+
+# =============================================================================
+# Фаза C — гео-сегменты + lookalike + reprocess
+# =============================================================================
+phase "C. Гео + lookalike + reprocess"
+
+# create-geo (окружность). Рабочее тело выверено на боевом API:
+#   geo_segment_type:1, radius на верхнем уровне, points:[{latitude,longitude}],
+#   times_quantity, period_length. Точка в Москве, радиус 1 км.
+if create_and_track segment "segments create-geo" \
+     segments create-geo --data "{\"name\":\"SMOKE yac geo ${TS}\",\"geo_segment_type\":1,\"radius\":1000,\"points\":[{\"latitude\":55.7558,\"longitude\":37.6173}],\"times_quantity\":1,\"period_length\":1}"; then
+  GEO_ID="$CREATED_ID"
+  expect_ok "segments update-geo-points $GEO_ID" \
+    segments update-geo-points "$GEO_ID" --data '[{"latitude":55.76,"longitude":37.62}]'
+else
+  GEO_ID=""
+  _skip "segments update-geo-points (нет гео-сегмента)"
+fi
+
+# create-geo-polygon. Выверено: geo_segment_type:2, polygons:[{points:[...]}],
+# контур ДОЛЖЕН быть замкнут (первая==последняя точка) и мал по площади (<~1 км²).
+create_and_track segment "segments create-geo-polygon" \
+  segments create-geo-polygon --data "{\"name\":\"SMOKE yac poly ${TS}\",\"geo_segment_type\":2,\"polygons\":[{\"points\":[{\"latitude\":55.7558,\"longitude\":37.6173},{\"latitude\":55.7558,\"longitude\":37.6213},{\"latitude\":55.7588,\"longitude\":37.6213},{\"latitude\":55.7588,\"longitude\":37.6173},{\"latitude\":55.7558,\"longitude\":37.6173}]}],\"times_quantity\":1,\"period_length\":1}"
+
+# create-lookalike: источник создаём САМИ — отдельный загруженный сегмент (всё на своих
+# данных, без хардкода чужого id). Свежий источник ещё не processed → API ожидаемо
+# отвергнет lookalike (create_or_err засчитывает это как PASS); если успел — затрекаем.
+make_data_file txt 10 1; LAL_SRC_FILE="$DATA_FILE"
+if create_and_track segment "segments upload-file (источник для lookalike)" segments upload-file "$LAL_SRC_FILE"; then
+  LAL_SRC="$CREATED_ID"
+  create_or_err segment "segments create-lookalike (src=$LAL_SRC)" \
+    segments create-lookalike --data "{\"name\":\"SMOKE yac lal ${TS}\",\"lookalike_link\":${LAL_SRC},\"lookalike_value\":1,\"maintain_device_distribution\":true,\"maintain_geo_distribution\":true}"
+  LAL_ID="$CREATED_ID"   # непусто, только если lookalike реально создался
+else
+  LAL_ID=""
+  _skip "segments create-lookalike (источник не загрузился)"
+fi
+
+# reprocess: на своём свежем сегменте API не даёт переобрабатывать (статус) → ожидаемая
+# ошибка. Берём lookalike, если создался, иначе гео-сегмент этой фазы — оба свои.
+REPROC_SEG="${LAL_ID:-}"; [ -z "$REPROC_SEG" ] && REPROC_SEG="${GEO_ID:-}"
+if [ -n "$REPROC_SEG" ]; then
+  expect_err "segments reprocess $REPROC_SEG (статус не допускает переобработку)" segments reprocess "$REPROC_SEG"
+else
+  _skip "segments reprocess (нет своего сегмента для проверки)"
+fi
+
+# =============================================================================
+# Фаза D — файловый сегмент: upload → confirm → modify → grants + create-pixel
+# =============================================================================
+phase "D. Файлы (upload/confirm/modify) + grants + create-pixel"
+
+# Синтетические email-файлы (используем --no-check-size, поэтому 100-минимум не нужен —
+# хватает нескольких строк, чтобы проверить multipart-путь upload/confirm/modify).
+make_data_file txt 10 1; EMAILS="$DATA_FILE"
+
+if create_and_track segment "segments upload-file" segments upload-file "$EMAILS"; then
+  UP_ID="$CREATED_ID"
+  expect_ok "segments confirm $UP_ID" \
+    segments confirm "$UP_ID" --data "{\"name\":\"SMOKE yac crm ${TS}\",\"content_type\":\"crm\",\"hashed\":false}" --no-check-size
+
+  make_data_file txt 5 11; MORE="$DATA_FILE"
+  # modify-data: только что confirm-нутый сегмент ещё не "processed" (обработка
+  # асинхронна) → API отвергает изменение по статусу. Ожидаем доменную ошибку
+  # (CLI multipart-путь при этом проверен). Всё на своём сегменте.
+  expect_err "segments modify-data $UP_ID (сегмент ещё не processed)" \
+    segments modify-data "$UP_ID" "$MORE" --modification-type addition --no-check-size
+
+  # grants на СВОЁМ сегменте, фейк-логин → ожидаем ошибку на add
+  expect_err "grants add $UP_ID (фейк-логин)" grants add "$UP_ID" --user-login "$FAKE_LOGIN" --permission view --comment "smoke"
+  expect_ok  "grants list $UP_ID"             grants list "$UP_ID"
+  expect_any "grants remove $UP_ID (нечего удалять)" grants remove "$UP_ID" --user-login "$FAKE_LOGIN"
+else
+  _skip "segments confirm / modify-data / grants (нет загруженного сегмента)"
+fi
+
+# upload-csv-file — отдельный сегмент
+make_data_file csv 10 1; CSV="$DATA_FILE"
+create_and_track segment "segments upload-csv-file" segments upload-csv-file "$CSV"
+
+# create-pixel: создаём свежий пиксель и сегмент на его основе
+if create_and_track pixel "pixels create (для create-pixel)" pixels create --name "SMOKE yac pxsrc ${TS}"; then
+  create_and_track segment "segments create-pixel" \
+    segments create-pixel --data "{\"name\":\"SMOKE yac pxseg ${TS}\",\"pixel_id\":${CREATED_ID},\"period_length\":30}"
+fi
+
+# =============================================================================
+# Фаза E — делегаты (фейк-логин)
+# =============================================================================
+phase "E. Делегаты"
+expect_err "delegates add (фейк-логин)"    delegates add --user-login "$FAKE_LOGIN" --perm view --comment "smoke"
+expect_ok  "delegates list"                delegates list
+expect_any "delegates remove (нечего удалять)" delegates remove --user-login "$FAKE_LOGIN"
+
+# =============================================================================
+# Фаза F — внешне-зависимые 3 (всегда expect_err)
+# =============================================================================
+phase "F. Внешние (metrika/appmetrica/client-id)"
+
+# Эти эндпоинты требуют реальных внешних ресурсов (счётчик Метрики, приложение
+# AppMetrica, ClientId-сегмент Метрики), которые скрипт не может «создать копию».
+# Гоняем с заведомо невалидными данными → ожидаем ошибку API. Проверяется, что CLI
+# отправляет запрос и корректно разбирает ошибку. Никаких чужих id.
+expect_err "segments create-metrika (невалидный counter_id)" \
+  segments create-metrika --data "{\"name\":\"SMOKE yac metrika ${TS}\",\"counter_id\":0}"
+expect_err "segments create-appmetrica (невалидный app_id)" \
+  segments create-appmetrica --data "{\"name\":\"SMOKE yac appm ${TS}\",\"app_id\":0}"
+expect_err "segments confirm-client-id (невалидный сегмент)" \
+  segments confirm-client-id 0 --data "{\"name\":\"SMOKE yac cid ${TS}\",\"source\":\"metrika\"}"
+
+# =============================================================================
+# Итог
+# =============================================================================
+echo ""
+echo "${B}══ Итог ══${N}"
+printf '  %sPASS: %d%s   %sFAIL: %d%s   %sSKIP: %d%s\n' "$G" "$PASS" "$N" "$R" "$FAIL" "$N" "$Y" "$SKIP" "$N"
+if [ "$FAIL" -gt 0 ]; then
+  echo "  Провалы:"; for f in "${FAILURES[@]}"; do echo "   - $f"; done
+fi
+# cleanup_all выполнится через trap EXIT
+[ "$FAIL" -eq 0 ]
