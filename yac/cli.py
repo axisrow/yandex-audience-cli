@@ -54,12 +54,23 @@ def main(
         None, "--token", envvar=ENV_TOKEN, help="OAuth-токен Яндекса."
     ),
     base_url: Optional[str] = typer.Option(
-        None, "--base-url", envvar=ENV_BASE_URL, help="Базовый URL API (для тестов/прокси)."
+        None,
+        "--base-url",
+        envvar=ENV_BASE_URL,
+        help="Базовый URL API (для тестов/прокси).",
     ),
-    output: str = typer.Option("json", "--output", "-o", help="Формат вывода: json | table."),
-    pretty: bool = typer.Option(False, "--pretty", help="Запрашивать pretty-ответ у API."),
+    output: str = typer.Option(
+        "json", "--output", "-o", help="Формат вывода: json | table."
+    ),
+    pretty: bool = typer.Option(
+        False, "--pretty", help="Запрашивать pretty-ответ у API."
+    ),
     _version: bool = typer.Option(
-        False, "--version", callback=_version_callback, is_eager=True, help="Версия CLI."
+        False,
+        "--version",
+        callback=_version_callback,
+        is_eager=True,
+        help="Версия CLI.",
     ),
 ) -> None:
     """Общие опции применяются ко всем командам."""

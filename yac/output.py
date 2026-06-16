@@ -19,7 +19,11 @@ def print_json(data: Any) -> None:
 
 def print_table(rows: list, *, title: str | None = None) -> None:
     """Вывести список словарей таблицей. При несовместимых данных — JSON."""
-    if not isinstance(rows, list) or not rows or not all(isinstance(r, dict) for r in rows):
+    if (
+        not isinstance(rows, list)
+        or not rows
+        or not all(isinstance(r, dict) for r in rows)
+    ):
         print_json(rows)
         return
 

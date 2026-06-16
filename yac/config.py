@@ -58,11 +58,7 @@ class Config:
 
 def resolve_token(token: Optional[str] = None) -> str:
     """Найти OAuth-токен по приоритету источников или поднять ConfigError."""
-    candidate = (
-        token
-        or os.environ.get(ENV_TOKEN)
-        or _read_token_file()
-    )
+    candidate = token or os.environ.get(ENV_TOKEN) or _read_token_file()
     if not candidate:
         raise ConfigError(
             "OAuth-токен не найден. Передайте --token, задайте переменную "
