@@ -22,6 +22,12 @@ dev = [
     "pytest>=8.0",
     "pytest-mock>=3.12",
     "respx>=0.21",
+    "black>=24.0",
+]
+# Документация (GitHub Pages). Отдельная группа, чтобы тесты не зависели от доков.
+docs = [
+    "mkdocs>=1.6",
+    "mkdocs-material>=9.5",
 ]
 
 [project.scripts]
