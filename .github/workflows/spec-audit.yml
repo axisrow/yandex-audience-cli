@@ -1,0 +1,26 @@
+name: Spec audit
+
+# Еженедельная сверка снапшота спеки (tests/data/audience_spec.json) с ЖИВЫМ
+# справочником Яндекса. Отдельно от CI и неблокирующе — аутаж доков Яндекса не
+# должен ронять обычный pytest. Падает, если живая спека разошлась с закоммиченным
+# снапшотом (дрейф API) — это сигнал обновить реестр и снапшот.
+on:
+  schedule:
+    - cron: "0 6 * * 1" # понедельник 06:00 UTC
+  workflow_dispatch:
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Установить проект с dev-зависимостями
+        run: pip install -e ".[dev]"
+      - name: Перетянуть спеку из справочника Яндекса (сеть)
+        run: python scripts/fetch_spec.py
+      - name: Проверить, что снапшот не дрейфовал
+        run: git diff --exit-code tests/data/audience_spec.json

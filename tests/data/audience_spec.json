@@ -1,0 +1,232 @@
+{
+  "base_path": "/v1/management",
+  "generated_by": "scripts/fetch_spec.py",
+  "locale": "ru",
+  "operations": [
+    {
+      "group": "accounts",
+      "method": "GET",
+      "multipart": false,
+      "op": "list",
+      "path": "accounts",
+      "slug": "accounts"
+    },
+    {
+      "group": "delegates",
+      "method": "PUT",
+      "multipart": false,
+      "op": "add",
+      "path": "delegate",
+      "slug": "addDelegate"
+    },
+    {
+      "group": "delegates",
+      "method": "GET",
+      "multipart": false,
+      "op": "list",
+      "path": "delegates",
+      "slug": "delegates"
+    },
+    {
+      "group": "delegates",
+      "method": "DELETE",
+      "multipart": false,
+      "op": "remove",
+      "path": "delegate",
+      "slug": "deleteDelegate"
+    },
+    {
+      "group": "grants",
+      "method": "PUT",
+      "multipart": false,
+      "op": "add",
+      "path": "segment/{}/grant",
+      "slug": "addGrant"
+    },
+    {
+      "group": "grants",
+      "method": "GET",
+      "multipart": false,
+      "op": "list",
+      "path": "segment/{}/grants",
+      "slug": "grants"
+    },
+    {
+      "group": "grants",
+      "method": "DELETE",
+      "multipart": false,
+      "op": "remove",
+      "path": "segment/{}/grant",
+      "slug": "deleteGrant"
+    },
+    {
+      "group": "pixels",
+      "method": "POST",
+      "multipart": false,
+      "op": "create",
+      "path": "pixels",
+      "slug": "create"
+    },
+    {
+      "group": "pixels",
+      "method": "DELETE",
+      "multipart": false,
+      "op": "delete",
+      "path": "pixel/{}",
+      "slug": "deletePixel"
+    },
+    {
+      "group": "pixels",
+      "method": "GET",
+      "multipart": false,
+      "op": "list",
+      "path": "pixels",
+      "slug": "pixels"
+    },
+    {
+      "group": "pixels",
+      "method": "POST",
+      "multipart": false,
+      "op": "undelete",
+      "path": "pixel/{}/undelete",
+      "slug": "undelete"
+    },
+    {
+      "group": "pixels",
+      "method": "PUT",
+      "multipart": false,
+      "op": "update",
+      "path": "pixel/{}",
+      "slug": "editPixel"
+    },
+    {
+      "group": "segments",
+      "method": "POST",
+      "multipart": false,
+      "op": "confirm",
+      "path": "segment/{}/confirm",
+      "slug": "confirm"
+    },
+    {
+      "group": "segments",
+      "method": "POST",
+      "multipart": false,
+      "op": "confirm_client_id",
+      "path": "segment/client_id/{}/confirm",
+      "slug": "confirmClientId"
+    },
+    {
+      "group": "segments",
+      "method": "POST",
+      "multipart": false,
+      "op": "create_appmetrica",
+      "path": "segments/create_appmetrica",
+      "slug": "createAppMetrica"
+    },
+    {
+      "group": "segments",
+      "method": "POST",
+      "multipart": false,
+      "op": "create_geo",
+      "path": "segments/create_geo",
+      "slug": "createGeo"
+    },
+    {
+      "group": "segments",
+      "method": "POST",
+      "multipart": false,
+      "op": "create_geo_polygon",
+      "path": "segments/create_geo_polygon",
+      "slug": "createGeoPolygon"
+    },
+    {
+      "group": "segments",
+      "method": "POST",
+      "multipart": false,
+      "op": "create_lookalike",
+      "path": "segments/create_lookalike",
+      "slug": "createLookalike"
+    },
+    {
+      "group": "segments",
+      "method": "POST",
+      "multipart": false,
+      "op": "create_metrika",
+      "path": "segments/create_metrika",
+      "slug": "createMetrika"
+    },
+    {
+      "group": "segments",
+      "method": "POST",
+      "multipart": false,
+      "op": "create_pixel",
+      "path": "segments/create_pixel",
+      "slug": "createPixel"
+    },
+    {
+      "group": "segments",
+      "method": "DELETE",
+      "multipart": false,
+      "op": "delete",
+      "path": "segment/{}",
+      "slug": "delete"
+    },
+    {
+      "group": "segments",
+      "method": "GET",
+      "multipart": false,
+      "op": "list",
+      "path": "segments",
+      "slug": "segments"
+    },
+    {
+      "group": "segments",
+      "method": "POST",
+      "multipart": true,
+      "op": "modify_data",
+      "path": "segment/{}/modify_data",
+      "slug": "modifyUploadingData"
+    },
+    {
+      "group": "segments",
+      "method": "PUT",
+      "multipart": false,
+      "op": "reprocess",
+      "path": "segment/{}/reprocess",
+      "slug": "reprocessSegment"
+    },
+    {
+      "group": "segments",
+      "method": "PUT",
+      "multipart": false,
+      "op": "update",
+      "path": "segment/{}",
+      "slug": "edit"
+    },
+    {
+      "group": "segments",
+      "method": "POST",
+      "multipart": false,
+      "op": "update_geo_points",
+      "path": "segment/{}/update_geo_points",
+      "slug": "updateGeoPoints"
+    },
+    {
+      "group": "segments",
+      "method": "POST",
+      "multipart": true,
+      "op": "upload_csv_file",
+      "path": "segments/upload_csv_file",
+      "slug": "uploadCsvFile"
+    },
+    {
+      "group": "segments",
+      "method": "POST",
+      "multipart": true,
+      "op": "upload_file",
+      "path": "segments/upload_file",
+      "slug": "uploadFile"
+    }
+  ],
+  "source": "https://yandex.ru/dev/audience/ru/ref/openapi"
+}
