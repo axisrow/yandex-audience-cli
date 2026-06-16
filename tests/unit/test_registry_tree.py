@@ -14,6 +14,8 @@ import pytest
 from yac import registry
 from yac.registry._core import ENDPOINT_ATTR, iter_endpoint_modules
 
+pytestmark = pytest.mark.unit
+
 # Обход дерева берём из прода (iter_endpoint_modules) — так страж проверяет
 # инвариант поверх той же машины, что грузит ENDPOINTS, и конвенция обхода
 # («файлы на _ — не эндпоинты») живёт в одном месте.

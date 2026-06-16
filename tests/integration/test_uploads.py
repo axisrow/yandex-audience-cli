@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import httpx
+import pytest
 import respx
 
 from yac.config import Config
 from yac.client import Client
 from yac.api.segments import Segments
+
+pytestmark = pytest.mark.integration
 
 BASE = "https://api-audience.yandex.ru/v1/management"
 

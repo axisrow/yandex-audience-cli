@@ -36,4 +36,12 @@ packages = ["yac"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+# e2e по умолчанию пропускается (conftest: skip без --run-e2e), поэтому фильтр
+# по маркеру в addopts не нужен — `pytest tests/e2e --run-e2e` работает ожидаемо.
 addopts = "-q"
+markers = [
+    "unit: изолированный модуль/функция, без сети",
+    "integration: связка слоёв через respx-моки",
+    "smoke: дымовой прогон CLI без сети (структура, справка, ошибки)",
+    "e2e: сквозной прогон настоящего yac (локальный stub-сервер или боевой API)",
+]

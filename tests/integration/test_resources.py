@@ -12,22 +12,17 @@ import httpx
 import pytest
 import respx
 
-from yac.config import Config
-from yac.client import Client
 from yac.api.accounts import Accounts
 from yac.api.delegates import Delegates
 from yac.api.grants import Grants
 from yac.api.pixels import Pixels
 from yac.api.segments import Segments
 
+pytestmark = pytest.mark.integration
+
 BASE = "https://api-audience.yandex.ru/v1/management"
 
-
-@pytest.fixture
-def client():
-    c = Client(Config(token="T"))
-    yield c
-    c.close()
+# Фикстура ``client`` — общая, в tests/conftest.py.
 
 
 def _route(method: str, path: str):
@@ -40,17 +35,55 @@ def _route(method: str, path: str):
 CASES = [
     # segments
     ("segments.list", lambda r: r.list(), "GET", "segments"),
-    ("segments.create_pixel", lambda r: r.create_pixel({"name": "s"}), "POST", "segments/create_pixel"),
-    ("segments.create_lookalike", lambda r: r.create_lookalike({}), "POST", "segments/create_lookalike"),
-    ("segments.create_metrika", lambda r: r.create_metrika({}), "POST", "segments/create_metrika"),
-    ("segments.create_appmetrica", lambda r: r.create_appmetrica({}), "POST", "segments/create_appmetrica"),
+    (
+        "segments.create_pixel",
+        lambda r: r.create_pixel({"name": "s"}),
+        "POST",
+        "segments/create_pixel",
+    ),
+    (
+        "segments.create_lookalike",
+        lambda r: r.create_lookalike({}),
+        "POST",
+        "segments/create_lookalike",
+    ),
+    (
+        "segments.create_metrika",
+        lambda r: r.create_metrika({}),
+        "POST",
+        "segments/create_metrika",
+    ),
+    (
+        "segments.create_appmetrica",
+        lambda r: r.create_appmetrica({}),
+        "POST",
+        "segments/create_appmetrica",
+    ),
     ("segments.create_geo", lambda r: r.create_geo({}), "POST", "segments/create_geo"),
-    ("segments.create_geo_polygon", lambda r: r.create_geo_polygon({}), "POST", "segments/create_geo_polygon"),
-    ("segments.update_geo_points", lambda r: r.update_geo_points(7, [{"latitude": 1, "longitude": 2}]),
-     "POST", "segment/7/update_geo_points"),
-    ("segments.confirm", lambda r: r.confirm(7, {"name": "x"}), "POST", "segment/7/confirm"),
-    ("segments.confirm_client_id", lambda r: r.confirm_client_id(7, {}), "POST",
-     "segment/client_id/7/confirm"),
+    (
+        "segments.create_geo_polygon",
+        lambda r: r.create_geo_polygon({}),
+        "POST",
+        "segments/create_geo_polygon",
+    ),
+    (
+        "segments.update_geo_points",
+        lambda r: r.update_geo_points(7, [{"latitude": 1, "longitude": 2}]),
+        "POST",
+        "segment/7/update_geo_points",
+    ),
+    (
+        "segments.confirm",
+        lambda r: r.confirm(7, {"name": "x"}),
+        "POST",
+        "segment/7/confirm",
+    ),
+    (
+        "segments.confirm_client_id",
+        lambda r: r.confirm_client_id(7, {}),
+        "POST",
+        "segment/client_id/7/confirm",
+    ),
     ("segments.update", lambda r: r.update(7, {"name": "x"}), "PUT", "segment/7"),
     ("segments.delete", lambda r: r.delete(7), "DELETE", "segment/7"),
     ("segments.reprocess", lambda r: r.reprocess(7), "PUT", "segment/7/reprocess"),
@@ -94,15 +127,23 @@ def test_resource_hits_expected_endpoint(client, name, call, method, path):
 
 @respx.mock
 def test_grant_add_optional_permission(client):
-    route = respx.put(f"{BASE}/segment/7/grant").mock(return_value=httpx.Response(200, json={}))
+    route = respx.put(f"{BASE}/segment/7/grant").mock(
+        return_value=httpx.Response(200, json={})
+    )
     Grants(client).add(7, "u@ya.ru", permission="edit", comment="c")
     body = json.loads(route.calls.last.request.content)
-    assert body["grant"] == {"user_login": "u@ya.ru", "permission": "edit", "comment": "c"}
+    assert body["grant"] == {
+        "user_login": "u@ya.ru",
+        "permission": "edit",
+        "comment": "c",
+    }
 
 
 @respx.mock
 def test_grant_add_without_optional(client):
-    route = respx.put(f"{BASE}/segment/7/grant").mock(return_value=httpx.Response(200, json={}))
+    route = respx.put(f"{BASE}/segment/7/grant").mock(
+        return_value=httpx.Response(200, json={})
+    )
     Grants(client).add(7, "u@ya.ru")
     body = json.loads(route.calls.last.request.content)
     assert body["grant"] == {"user_login": "u@ya.ru"}  # без permission/comment
@@ -110,7 +151,9 @@ def test_grant_add_without_optional(client):
 
 @respx.mock
 def test_delegate_add_optional_perm(client):
-    route = respx.put(f"{BASE}/delegate").mock(return_value=httpx.Response(200, json={}))
+    route = respx.put(f"{BASE}/delegate").mock(
+        return_value=httpx.Response(200, json={})
+    )
     Delegates(client).add("u@ya.ru", perm="view")
     body = json.loads(route.calls.last.request.content)
     assert body["delegate"] == {"user_login": "u@ya.ru", "perm": "view"}
@@ -118,7 +161,9 @@ def test_delegate_add_optional_perm(client):
 
 @respx.mock
 def test_segments_list_limit_offset(client):
-    route = respx.get(f"{BASE}/segments").mock(return_value=httpx.Response(200, json={"segments": []}))
+    route = respx.get(f"{BASE}/segments").mock(
+        return_value=httpx.Response(200, json={"segments": []})
+    )
     Segments(client).list(limit=50, offset=10)
     params = route.calls.last.request.url.params
     assert params["limit"] == "50" and params["offset"] == "10"
@@ -126,8 +171,12 @@ def test_segments_list_limit_offset(client):
 
 @respx.mock
 def test_segments_confirm_check_size(client):
-    route = respx.post(f"{BASE}/segment/9/confirm").mock(return_value=httpx.Response(200, json={}))
-    Segments(client).confirm(9, {"name": "x", "content_type": "crm", "hashed": False}, check_size=False)
+    route = respx.post(f"{BASE}/segment/9/confirm").mock(
+        return_value=httpx.Response(200, json={})
+    )
+    Segments(client).confirm(
+        9, {"name": "x", "content_type": "crm", "hashed": False}, check_size=False
+    )
     assert route.calls.last.request.url.params["check_size"] == "false"
 
 
@@ -141,9 +190,5 @@ def test_cases_cover_all_non_upload_endpoints():
     for op in multipart_ops:
         assert f"segments.{op}" not in covered
 
-    expected = {
-        f"{ep.group}.{ep.op}"
-        for ep in registry.ENDPOINTS
-        if not ep.multipart
-    }
+    expected = {f"{ep.group}.{ep.op}" for ep in registry.ENDPOINTS if not ep.multipart}
     assert covered == expected, f"Не покрыты: {expected - covered}"
