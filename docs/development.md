@@ -75,3 +75,24 @@ ruff check yac tests       # линтер (дефолтные правила; E5
 
 В CI оба гоняются гейтом (job `lint` в `.github/workflows/ci.yml`) и **падают** при
 несоответствии формата или замечании ruff.
+
+## Аудит покрытия: реестр ↔ спека Яндекса
+
+`tests/test_openapi_coverage.py` сверяет реестр с **снимком спеки** Yandex Audience API
+по `(метод, нормализованный путь)`; `multipart` сверяется как атрибут. Тест **offline** —
+читает закоммиченный снимок `tests/data/audience_spec.json` и падает на любом расхождении
+(новый/удалённый эндпоинт, дрейф multipart), так что рассинхрон с API становится красным тестом.
+
+Снимок добывает `scripts/fetch_spec.py` (вся сеть — только в нём; справочник Diplodoc, локаль `ru`).
+Обновление — вручную:
+
+```bash
+python scripts/fetch_spec.py --probe   # выверить слаги: по каждому 200|404 + (метод, путь)
+python scripts/fetch_spec.py           # перезаписать снимок
+git diff tests/data/audience_spec.json # пусто → API не дрейфовал
+```
+
+Слаги справочника **не выводятся** из имени операции (список сегментов = слаг `segments`, не `list`)
+и машинного оглавления у Diplodoc нет — поэтому карта `op → slug` задана явно в `fetch_spec.py`
+и выверяется `--probe`. Еженедельно живую сверку гоняет `.github/workflows/spec-audit.yml`
+(отдельно от CI, неблокирующе).
