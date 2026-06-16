@@ -34,7 +34,7 @@ fi
 # YANDEX_AUDIENCE_BASE_URL=… в .env молча увела бы запросы (и OAuth-токен!) на чужой
 # хост. Читаем построчно (без xargs — он ломает значения с пробелами/кавычками).
 YANDEX_AUDIENCE_TOKEN="$(
-  grep -E '^YANDEX_AUDIENCE_TOKEN=' "$ENV_FILE" | tail -1 | cut -d= -f2- \
+  grep -E '^[[:space:]]*(export[[:space:]]+)?YANDEX_AUDIENCE_TOKEN=' "$ENV_FILE" | tail -1 | cut -d= -f2- \
     | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e 's/^"\(.*\)"$/\1/' -e "s/^'\(.*\)'$/\1/"
 )"
 export YANDEX_AUDIENCE_TOKEN
@@ -155,7 +155,10 @@ create_or_err() {
       if [ "$kind" = pixel ]; then track_pixel "$CREATED_ID"; else track_seg "$CREATED_ID"; fi
       _ok "$desc → id=$CREATED_ID"
     else
-      _fail "$desc" "успех, но нет id: $(head -c 200 <<<"$LAST_OUT")"
+      # API сказал «успех», но id не извлёкся (форма ответа стабильна {"segment":{"id"}},
+      # так что это крайне маловероятно). Сигналим FAIL — это громче молчаливого пропуска
+      # и привлечёт внимание, если форма ответа когда-то изменится.
+      _fail "$desc" "успех, но нет id (объект мог не затрекаться!): $(head -c 200 <<<"$LAST_OUT")"
     fi
   elif is_api_error; then
     _ok "$desc (ожидаемая ошибка API)"
