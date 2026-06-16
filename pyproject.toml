@@ -23,6 +23,11 @@ dev = [
     "pytest-mock>=3.12",
     "respx>=0.21",
 ]
+# Документация (GitHub Pages). Отдельная группа, чтобы тесты не зависели от доков.
+docs = [
+    "mkdocs>=1.6",
+    "mkdocs-material>=9.5",
+]
 
 [project.scripts]
 yac = "yac:app"

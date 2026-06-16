@@ -1,0 +1,54 @@
+name: Docs
+
+# Сборка и публикация документации (MkDocs Material) на GitHub Pages.
+# Триггерится на push в main, затрагивающий доки/конфиг, и вручную.
+on:
+  push:
+    branches: [main]
+    paths:
+      - docs/**
+      - mkdocs.yml
+      - pyproject.toml
+      - .github/workflows/docs.yml
+  workflow_dispatch:
+
+# Права для публикации на Pages.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Не отменять идущий деплой; новые запуски ждут очереди.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Установить зависимости документации
+        run: pip install -e ".[docs]"
+      - name: Собрать сайт (строгий режим)
+        run: mkdocs build --strict
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

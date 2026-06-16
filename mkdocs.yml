@@ -1,0 +1,60 @@
+site_name: yac — CLI для Yandex Audience API
+site_description: CLI, повторяющий структуру Yandex Audience API 1:1 (5 групп, 28 эндпоинтов)
+site_url: https://axisrow.github.io/yandex-audience-cli/
+repo_url: https://github.com/axisrow/yandex-audience-cli
+repo_name: axisrow/yandex-audience-cli
+
+theme:
+  name: material
+  language: ru
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: red
+      accent: red
+      toggle:
+        icon: material/weather-night
+        name: Тёмная тема
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: red
+      accent: red
+      toggle:
+        icon: material/weather-sunny
+        name: Светлая тема
+  features:
+    - navigation.sections
+    - navigation.top
+    - navigation.tracking
+    - content.code.copy
+    - search.suggest
+    - search.highlight
+    - toc.follow
+
+plugins:
+  - search:
+      lang: ru
+
+markdown_extensions:
+  - admonition
+  - attr_list          # нужен для явных якорей заголовков ({ #id }) — напр. usage.md#data-json
+  - pymdownx.superfences
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - tables
+  - toc:
+      permalink: true
+
+nav:
+  - Главная: index.md
+  - Установка: installation.md
+  - Аутентификация: authentication.md
+  - Использование: usage.md
+  - Команды:
+      - segments (16): commands/segments.md
+      - grants (3): commands/grants.md
+      - pixels (5): commands/pixels.md
+      - accounts (1): commands/accounts.md
+      - delegates (3): commands/delegates.md
+  - Архитектура: architecture.md
+  - Разработка: development.md
