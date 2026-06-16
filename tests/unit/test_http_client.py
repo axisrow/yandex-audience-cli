@@ -9,6 +9,8 @@ import respx
 from yac.config import Config
 from yac.client import APIError, Client, RateLimitError
 
+pytestmark = pytest.mark.unit
+
 BASE = "https://api-audience.yandex.ru/v1/management"
 
 

@@ -21,6 +21,8 @@ from yac.api.grants import Grants
 from yac.api.pixels import Pixels
 from yac.api.segments import Segments
 
+pytestmark = pytest.mark.unit
+
 EXPECTED_PER_GROUP = {
     "segments": 16,
     "grants": 3,

@@ -17,15 +17,35 @@ Markdown по детерминированному URL `https://yandex.ru/dev/au
 
 ```bash
 pip install -e ".[dev]"     # установка editable + dev-зависимости (pytest, respx)
-pytest                       # все тесты (192)
-pytest tests/test_resources.py::test_... -q   # один тест (по узлу <файл>::<тест>)
+pytest                       # вся пирамида КРОМЕ e2e (e2e skip без --run-e2e)
+pytest --run-e2e             # + e2e (локальный stub-сервер; боевой — skip без YAC_E2E_TOKEN)
+pytest tests/unit            # один уровень по пути (unit|integration|smoke|e2e)
+pytest -m smoke              # один уровень по маркеру (unit|integration|smoke|e2e)
+pytest tests/integration/test_resources.py::test_... -q   # один тест (по узлу <файл>::<тест>)
 pytest -k "<подстрока>"      # один тест/группа по имени без указания файла
 yac --help                   # справка; глобальные опции ДО группы: yac --token X segments list
 python -m yac --help         # эквивалент консольного скрипта
 ```
 
 Тесты не требуют установки: `pyproject.toml` задаёт `pythonpath = ["."]`, поэтому `import yac`
-резолвится по корню репо. Тесты бьют по HTTP через **respx** (моки httpx) — реальный токен не нужен.
+резолвится по корню репо.
+
+**Тестовая пирамида** — `tests/{unit,integration,smoke,e2e}/`, уровень виден из `ls`, на каждом
+файле `pytestmark = pytest.mark.<уровень>` (запуск и по пути, и по `-m`). Общие фикстуры —
+`tests/conftest.py` (`client` для ресурсов; `stub_server` — настоящий stdlib-сервер для e2e).
+- **unit** — изолированный модуль без сети: реестр (coverage/tree) и класс `Client` (respx лишь
+  подменяет сокет).
+- **integration** — связка слоёв через **respx** (моки httpx): resource↔client↔HTTP, multipart,
+  команды CLI. Реальный токен не нужен.
+- **smoke** — дымовой прогон CLI без сети: справка/версия/структура групп, чистая ошибка без токена.
+- **e2e** — сквозной прогон НАСТОЯЩЕГО `yac` без моков: `test_local_server.py` гоняет CLI против
+  локального stdlib-сервера через `--base-url` (реальный сокет); `test_live_api.py` бьёт в боевой
+  `api-audience.yandex.ru` и **пропускается** без `YAC_E2E_TOKEN`.
+
+e2e по умолчанию пропускается (`conftest.py` метит его skip, пока не передан `--run-e2e` —
+идиоматичный `pytest_addoption` + `pytest_collection_modifyitems`). Запуск: `pytest --run-e2e`
+или `pytest tests/e2e --run-e2e`. Боевой e2e: `YAC_E2E_TOKEN=*** pytest tests/e2e/test_live_api.py
+--run-e2e`.
 
 ## Архитектура: реестр — единственный источник правды
 
@@ -70,12 +90,12 @@ client.py Client.request  (httpx; Authorization: OAuth <token>, base .../v1/mana
    регистрировать.
 2. Добавь метод с именем = `op` в соответствующий `yac/api/<group>.py` (тело — `self._call("op", ...)`).
 3. Добавь команду с тем же именем (`_`→`-`) в `yac/commands/<group>.py`.
-4. Обнови `EXPECTED_PER_GROUP` в `tests/test_registry_coverage.py` (итог `EXPECTED_TOTAL` = `sum(...)`,
-   **не хардкодь итоговое число**).
+4. Обнови `EXPECTED_PER_GROUP` в `tests/unit/test_registry_coverage.py` (итог `EXPECTED_TOTAL` =
+   `sum(...)`, **не хардкодь итоговое число**).
 
-Машинные гарантии (тесты упадут при нарушении): `tests/test_registry_coverage.py` — у эндпоинта нет
-метода ресурса ИЛИ команды CLI; `tests/test_registry_tree.py` — имя файла ≠ `op`, каталог ≠ `group`,
-число файлов ≠ числу эндпоинтов. Сама автосборка (`_core._load`) падает громко при импорте, если файл
+Машинные гарантии (тесты упадут при нарушении): `tests/unit/test_registry_coverage.py` — у эндпоинта
+нет метода ресурса ИЛИ команды CLI; `tests/unit/test_registry_tree.py` — имя файла ≠ `op`, каталог ≠
+`group`, число файлов ≠ числу эндпоинтов. Сама автосборка (`_core._load`) падает громко при импорте, если файл
 не объявляет `ENDPOINT` или возникает дубль `(group, op)`.
 
 ## Раскладка и окружение (важная причина текущей структуры)
