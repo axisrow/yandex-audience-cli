@@ -8,9 +8,11 @@
 # созданным в этом прогоне. Все тестовые объекты помечаются префиксом "SMOKE yac".
 #
 # Токен берётся из .env (YANDEX_AUDIENCE_TOKEN); боевой base-url (не переопределяется).
-# Внешне-зависимые эндпоинты (metrika/appmetrica/client-id) и кейсы с фейк-логином
-# по умолчанию ОЖИДАЮТ ошибку API — это засчитывается как PASS (проверяем обработку).
-# Передай SMOKE_COUNTER_ID / SMOKE_APP_ID / SMOKE_CLIENTID_SEG, чтобы прогнать их на успех.
+# ВСЁ — на своих данных: скрипт не принимает чужие id и ничего не хардкодит. Команды,
+# которым нужен внешний ресурс (metrika/appmetrica/client-id) или зрелый сегмент
+# (reprocess/modify-data), гоняются с заведомо невалидными/свежими данными и ОЖИДАЮТ
+# ошибку API — это засчитывается как PASS (проверяем, что CLI отправил запрос и разобрал
+# ответ). Никаких env-override на существующие сегменты.
 #
 # Использование:  bash scripts/live_smoke.sh
 # Выход: 0 — все ожидаемые исходы совпали; 1 — есть FAIL.
@@ -124,6 +126,29 @@ create_and_track() {
   _ok "$desc → id=$CREATED_ID"
 }
 
+# create_or_err <segment|pixel> "<desc>" <yac args...>
+# Для создающих команд, которые МОГУТ ожидаемо упасть доменной ошибкой (напр.
+# lookalike от ещё не обработанного источника). Успех → трек + PASS (id в CREATED_ID);
+# чистая ошибка API → PASS (ожидаемо); traceback → FAIL. Всё на своих данных.
+create_or_err() {
+  local kind="$1" desc="$2"; shift 2
+  run_json "$@"
+  CREATED_ID=""
+  if [ "$LAST_RC" -eq 0 ]; then
+    CREATED_ID="$(json_id "$kind")"
+    if [ -n "$CREATED_ID" ]; then
+      if [ "$kind" = pixel ]; then track_pixel "$CREATED_ID"; else track_seg "$CREATED_ID"; fi
+      _ok "$desc → id=$CREATED_ID"
+    else
+      _fail "$desc" "успех, но нет id: $(head -c 200 <<<"$LAST_OUT")"
+    fi
+  elif grep -q "Ошибка:" <<<"$LAST_OUT" && ! grep -q "Traceback" <<<"$LAST_OUT"; then
+    _ok "$desc (ожидаемая ошибка API)"
+  else
+    _fail "$desc" "exit=$LAST_RC, нет чистого 'Ошибка:' / traceback: $(head -c 200 <<<"$LAST_OUT")"
+  fi
+}
+
 # make_data_file <txt|csv> <count> <start_index> — создать temp-файл синтетических
 # email-данных (заголовок по типу), затрекать для удаления. Путь — в DATA_FILE
 # (НЕ через stdout/subshell, иначе track_tmp потерялся бы в subshell'е).
@@ -217,22 +242,27 @@ fi
 create_and_track segment "segments create-geo-polygon" \
   segments create-geo-polygon --data "{\"name\":\"SMOKE yac poly ${TS}\",\"geo_segment_type\":2,\"polygons\":[{\"points\":[{\"latitude\":55.7558,\"longitude\":37.6173},{\"latitude\":55.7558,\"longitude\":37.6213},{\"latitude\":55.7588,\"longitude\":37.6213},{\"latitude\":55.7588,\"longitude\":37.6173},{\"latitude\":55.7558,\"longitude\":37.6173}]}],\"times_quantity\":1,\"period_length\":1}"
 
-# create-lookalike: источник — обработанный сегмент. Приоритет: env SMOKE_LOOKALIKE_SRC,
-# иначе существующий swift 12834430 (свежий GEO ещё может быть незрелым для lookalike).
-LAL_SRC="${SMOKE_LOOKALIKE_SRC:-12834430}"
-if create_and_track segment "segments create-lookalike (src=$LAL_SRC)" \
-     segments create-lookalike --data "{\"name\":\"SMOKE yac lal ${TS}\",\"lookalike_link\":${LAL_SRC},\"lookalike_value\":1,\"maintain_device_distribution\":true,\"maintain_geo_distribution\":true}"; then
-  LAL_ID="$CREATED_ID"
-  # reprocess: свежий lookalike сразу в статусе is_processed, API не даёт его
-  # переобрабатывать → ожидаем доменную ошибку статуса (CLI-путь при этом проверен).
-  # Передай SMOKE_REPROCESS_SEG (сегмент в подходящем статусе), чтобы ждать успех.
-  if [ -n "${SMOKE_REPROCESS_SEG:-}" ]; then
-    expect_ok  "segments reprocess $SMOKE_REPROCESS_SEG" segments reprocess "$SMOKE_REPROCESS_SEG"
-  else
-    expect_err "segments reprocess $LAL_ID (статус is_processed — переобработка запрещена)" segments reprocess "$LAL_ID"
-  fi
+# create-lookalike: источник создаём САМИ — отдельный загруженный сегмент (всё на своих
+# данных, без хардкода чужого id). Свежий источник ещё не processed → API ожидаемо
+# отвергнет lookalike (create_or_err засчитывает это как PASS); если успел — затрекаем.
+make_data_file txt 10 1; LAL_SRC_FILE="$DATA_FILE"
+if create_and_track segment "segments upload-file (источник для lookalike)" segments upload-file "$LAL_SRC_FILE"; then
+  LAL_SRC="$CREATED_ID"
+  create_or_err segment "segments create-lookalike (src=$LAL_SRC)" \
+    segments create-lookalike --data "{\"name\":\"SMOKE yac lal ${TS}\",\"lookalike_link\":${LAL_SRC},\"lookalike_value\":1,\"maintain_device_distribution\":true,\"maintain_geo_distribution\":true}"
+  LAL_ID="$CREATED_ID"   # непусто, только если lookalike реально создался
 else
-  _skip "segments reprocess (нет lookalike-сегмента)"
+  LAL_ID=""
+  _skip "segments create-lookalike (источник не загрузился)"
+fi
+
+# reprocess: на своём свежем сегменте API не даёт переобрабатывать (статус) → ожидаемая
+# ошибка. Берём lookalike, если создался, иначе гео-сегмент этой фазы — оба свои.
+REPROC_SEG="${LAL_ID:-}"; [ -z "$REPROC_SEG" ] && REPROC_SEG="${GEO_ID:-}"
+if [ -n "$REPROC_SEG" ]; then
+  expect_err "segments reprocess $REPROC_SEG (статус не допускает переобработку)" segments reprocess "$REPROC_SEG"
+else
+  _skip "segments reprocess (нет своего сегмента для проверки)"
 fi
 
 # =============================================================================
@@ -252,15 +282,9 @@ if create_and_track segment "segments upload-file" segments upload-file "$EMAILS
   make_data_file txt 5 11; MORE="$DATA_FILE"
   # modify-data: только что confirm-нутый сегмент ещё не "processed" (обработка
   # асинхронна) → API отвергает изменение по статусу. Ожидаем доменную ошибку
-  # (CLI multipart-путь при этом проверен). Передай SMOKE_MODIFY_SEG (уже
-  # обработанный загруженный сегмент), чтобы прогнать modify-data на успех.
-  if [ -n "${SMOKE_MODIFY_SEG:-}" ]; then
-    expect_ok  "segments modify-data $SMOKE_MODIFY_SEG (addition)" \
-      segments modify-data "$SMOKE_MODIFY_SEG" "$MORE" --modification-type addition --no-check-size
-  else
-    expect_err "segments modify-data $UP_ID (сегмент ещё не processed)" \
-      segments modify-data "$UP_ID" "$MORE" --modification-type addition --no-check-size
-  fi
+  # (CLI multipart-путь при этом проверен). Всё на своём сегменте.
+  expect_err "segments modify-data $UP_ID (сегмент ещё не processed)" \
+    segments modify-data "$UP_ID" "$MORE" --modification-type addition --no-check-size
 
   # grants на СВОЁМ сегменте, фейк-логин → ожидаем ошибку на add
   expect_err "grants add $UP_ID (фейк-логин)" grants add "$UP_ID" --user-login "$FAKE_LOGIN" --permission view --comment "smoke"
@@ -289,32 +313,20 @@ expect_ok  "delegates list"                delegates list
 expect_any "delegates remove (нечего удалять)" delegates remove --user-login "$FAKE_LOGIN"
 
 # =============================================================================
-# Фаза F — внешне-зависимые 3 (по умолчанию expect_err, expect_ok с реальными ID)
+# Фаза F — внешне-зависимые 3 (всегда expect_err)
 # =============================================================================
 phase "F. Внешние (metrika/appmetrica/client-id)"
 
-# metrika/appmetrica: с реальным ID (env) ждём успех (create_and_track), иначе —
-# ожидаемую ошибку (нет ресурса). Один и тот же путь, только источник counter/app разный.
-if [ -n "${SMOKE_COUNTER_ID:-}" ]; then
-  create_and_track segment "segments create-metrika (counter=$SMOKE_COUNTER_ID)" \
-    segments create-metrika --data "{\"name\":\"SMOKE yac metrika ${TS}\",\"counter_id\":${SMOKE_COUNTER_ID}}"
-else
-  expect_err "segments create-metrika (без реального counter_id)" segments create-metrika --data "{\"name\":\"SMOKE yac metrika ${TS}\",\"counter_id\":0}"
-fi
-
-if [ -n "${SMOKE_APP_ID:-}" ]; then
-  create_and_track segment "segments create-appmetrica (app=$SMOKE_APP_ID)" \
-    segments create-appmetrica --data "{\"name\":\"SMOKE yac appm ${TS}\",\"app_id\":${SMOKE_APP_ID}}"
-else
-  expect_err "segments create-appmetrica (без реального app_id)" segments create-appmetrica --data "{\"name\":\"SMOKE yac appm ${TS}\",\"app_id\":0}"
-fi
-
-CIDSEG="${SMOKE_CLIENTID_SEG:-}"
-if [ -n "$CIDSEG" ]; then
-  expect_ok "segments confirm-client-id $CIDSEG" segments confirm-client-id "$CIDSEG" --data "{\"name\":\"SMOKE yac cid ${TS}\",\"source\":\"metrika\"}"
-else
-  expect_err "segments confirm-client-id (без реального ClientId-сегмента)" segments confirm-client-id 0 --data "{\"name\":\"SMOKE yac cid ${TS}\",\"source\":\"metrika\"}"
-fi
+# Эти эндпоинты требуют реальных внешних ресурсов (счётчик Метрики, приложение
+# AppMetrica, ClientId-сегмент Метрики), которые скрипт не может «создать копию».
+# Гоняем с заведомо невалидными данными → ожидаем ошибку API. Проверяется, что CLI
+# отправляет запрос и корректно разбирает ошибку. Никаких чужих id.
+expect_err "segments create-metrika (невалидный counter_id)" \
+  segments create-metrika --data "{\"name\":\"SMOKE yac metrika ${TS}\",\"counter_id\":0}"
+expect_err "segments create-appmetrica (невалидный app_id)" \
+  segments create-appmetrica --data "{\"name\":\"SMOKE yac appm ${TS}\",\"app_id\":0}"
+expect_err "segments confirm-client-id (невалидный сегмент)" \
+  segments confirm-client-id 0 --data "{\"name\":\"SMOKE yac cid ${TS}\",\"source\":\"metrika\"}"
 
 # =============================================================================
 # Итог
