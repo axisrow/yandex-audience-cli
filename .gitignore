@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+build/
+dist/
+.eggs/
+
+# Тесты / кэши инструментов
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Виртуальные окружения (проект ставится без venv, но на всякий случай)
+.venv/
+venv/
+
+# Редакторы / ОС
+.DS_Store
+*.swp
+.idea/
+.vscode/
+
+# Локальное служебное (Claude Code)
+.claude/
+
+# Секреты (токен резолвится из env или ~/.config, не из репо)
+token
+*.token
