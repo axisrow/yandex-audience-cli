@@ -97,3 +97,21 @@ def test_every_endpoint_has_cli_command(ep):
 def test_all_groups_registered_in_main_app():
     root = typer.main.get_command(root_app)
     assert set(registry.GROUPS).issubset(set(root.commands.keys()))
+
+
+def test_get_ops_are_exactly_named_list():
+    """Bash-эвристика троттлинга записи (scripts/live_smoke.sh, run_json) считает read'ами
+    только op с именем 'list' и не знает про registry. Пин: GET ⇔ 'list' — иначе новый
+    read-оп молча перетроттлится, а write-оп с именем 'list' молча выпадет из pacing'а.
+    """
+    for ep in registry.ENDPOINTS:
+        if ep.method == "GET":
+            assert ep.op == "list", (
+                f"GET-оп {ep.group}.{ep.op}: bash-троттлинг считает его записью (лишние паузы). "
+                "Дополни case в run_json scripts/live_smoke.sh."
+            )
+        elif ep.op == "list":
+            assert ep.method == "GET", (
+                f"{ep.group}.list — метод {ep.method}, но bash-троттлинг пропускает 'list' как "
+                "чтение: write останется без pacing'а (риск 429). Чини scripts/live_smoke.sh."
+            )
