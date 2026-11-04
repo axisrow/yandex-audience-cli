@@ -13,6 +13,8 @@
 
 from __future__ import annotations
 
+import sys
+import time
 from typing import Any, Mapping, Optional
 
 import httpx
@@ -20,6 +22,28 @@ import httpx
 from .config import Config
 
 DEFAULT_TIMEOUT = 30.0
+
+#: Повторных попыток после HTTP 429 (итого попыток: RETRY_429_ATTEMPTS + 1).
+RETRY_429_ATTEMPTS = 1
+#: Пауза перед повтором, если API не отдал заголовок Retry-After.
+RETRY_429_DEFAULT_WAIT = 60.0
+
+
+def _sleep(seconds: float) -> None:
+    """Точка подмены в тестах (реальный сон — time.sleep)."""
+    time.sleep(seconds)
+
+
+def _retry_wait(response: httpx.Response) -> float:
+    """Пауза до повтора: Retry-After от API, иначе дефолт. Мусорный заголовок не роняет."""
+    raw = response.headers.get("Retry-After")
+    if raw:
+        try:
+            return max(float(raw), 0.0)
+        except ValueError:
+            pass
+    return RETRY_429_DEFAULT_WAIT
+    return RETRY_429_DEFAULT_WAIT
 
 
 class APIError(RuntimeError):
@@ -89,8 +113,35 @@ class Client:
         if pretty:
             query["pretty"] = 1
 
+        # HTTP 429 — не доменный отказ, а квотный голод: повтор безопасен (запрос
+        # отклонён до обработки), поэтому ретраим с паузой Retry-After/60с —
+        # иначе любой скрипт >10 записей/мин падает на 11-й. Пауза печатается в
+        # stderr, чтобы ожидание не было молчаливым.
+        response = self._send(method, path, query, json, files)
+        for attempt in range(RETRY_429_ATTEMPTS):
+            if response.status_code != 429:
+                break
+            wait = _retry_wait(response)
+            print(
+                f"HTTP 429: пауза {wait:g}с и повтор (осталось попыток: "
+                f"{RETRY_429_ATTEMPTS - attempt})…",
+                file=sys.stderr,
+            )
+            _sleep(wait)
+            response = self._send(method, path, query, json, files)
+
+        return self._handle(response)
+
+    def _send(
+        self,
+        method: str,
+        path: str,
+        query: Mapping[str, Any],
+        json: Any,
+        files: Optional[Mapping[str, Any]],
+    ) -> httpx.Response:
         try:
-            response = self._http.request(
+            return self._http.request(
                 method.upper(),
                 path.lstrip("/"),
                 params=query or None,
@@ -99,8 +150,6 @@ class Client:
             )
         except httpx.HTTPError as exc:  # сетевые/таймаут-ошибки
             raise APIError(f"Сетевая ошибка: {exc}") from exc
-
-        return self._handle(response)
 
     # -- разбор ответа -------------------------------------------------------
     @staticmethod
