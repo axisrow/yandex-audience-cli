@@ -57,6 +57,13 @@ if [ -t 1 ]; then G=$'\e[32m'; R=$'\e[31m'; Y=$'\e[33m'; B=$'\e[1m'; N=$'\e[0m';
 PASS=0; FAIL=0; SKIP=0
 declare -a FAILURES=()
 
+# --- троттлинг записи: лимит Audience API «10 записей/мин» ---------------------
+# Перед каждым write-запросом (в run_json и в cleanup-удалениях) — throttle_write:
+# скользящее окно 60с, при переполнении пауза 60с. Без него фаза D ловит 429
+# на segments create-pixel и даёт ложный FAIL.
+# shellcheck source=/dev/null
+source "$SCRIPT_DIR/throttle.sh"
+
 # --- трекеры созданного + cleanup-trap ----------------------------------------
 declare -a SEG_IDS=()
 declare -a PIXEL_IDS=()
@@ -73,6 +80,7 @@ cleanup_all() {
   local i
   for (( i=${#SEG_IDS[@]}-1; i>=0; i-- )); do
     local sid="${SEG_IDS[$i]}"
+    throttle_write
     if yac --base-url "$BASE_URL" segments delete "$sid" >/dev/null 2>&1; then
       echo "  segment $sid удалён"
     else
@@ -81,6 +89,7 @@ cleanup_all() {
   done
   for (( i=${#PIXEL_IDS[@]}-1; i>=0; i-- )); do
     local pid="${PIXEL_IDS[$i]}"
+    throttle_write
     if yac --base-url "$BASE_URL" pixels delete "$pid" >/dev/null 2>&1; then
       echo "  pixel $pid удалён"
     else
@@ -97,6 +106,8 @@ trap cleanup_all EXIT
 # и токен идут только на боевой Audience.
 LAST_OUT=""; LAST_RC=0
 run_json() {
+  # чтения (op = list) лимитом записи не считаются
+  case "${2:-}" in list) ;; *) throttle_write ;; esac
   LAST_OUT="$(yac --base-url "$BASE_URL" --output json "$@" 2>&1)"; LAST_RC=$?
   return 0
 }
