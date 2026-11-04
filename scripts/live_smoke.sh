@@ -57,6 +57,19 @@ if [ -t 1 ]; then G=$'\e[32m'; R=$'\e[31m'; Y=$'\e[33m'; B=$'\e[1m'; N=$'\e[0m';
 PASS=0; FAIL=0; SKIP=0
 declare -a FAILURES=()
 
+# --- троттлинг записи: лимит Audience API «10 записей/мин» ---------------------
+# Перед каждым write-запросом (в run_json и в cleanup-удалениях) — throttle_write:
+# скользящее окно 60с, при переполнении пауза 60с. Без него фаза D ловит 429
+# на segments create-pixel и даёт ложный FAIL.
+# shellcheck source=/dev/null
+source "$SCRIPT_DIR/throttle.sh"
+# Гвард: поломка source не должна деградировать в молчаливый no-op (throttle_write
+# стал бы «command not found» на каждом write, и 429 вернулся бы без единого FAIL'а).
+if [ "$(type -t throttle_write)" != "function" ]; then
+  echo "ОШИБКА: throttle.sh не загрузился — throttle_write не определён" >&2
+  exit 1
+fi
+
 # --- трекеры созданного + cleanup-trap ----------------------------------------
 declare -a SEG_IDS=()
 declare -a PIXEL_IDS=()
@@ -69,10 +82,14 @@ track_tmp()   { [ -n "${1:-}" ] && TMP_FILES+=("$1"); }
 cleanup_all() {
   echo ""
   echo "${B}── cleanup ──${N}"
+  # Ids — ДО удалений: если прогон оборвут посреди cleanup (Ctrl-C/CI-таймаут во время
+  # throttle-паузы), список останется на экране — объекты можно убрать руками.
+  echo "  segments: ${SEG_IDS[*]:-нет}  |  pixels: ${PIXEL_IDS[*]:-нет}"
   # сегменты — в обратном порядке (производные раньше источников)
   local i
   for (( i=${#SEG_IDS[@]}-1; i>=0; i-- )); do
     local sid="${SEG_IDS[$i]}"
+    throttle_write
     if yac --base-url "$BASE_URL" segments delete "$sid" >/dev/null 2>&1; then
       echo "  segment $sid удалён"
     else
@@ -81,6 +98,7 @@ cleanup_all() {
   done
   for (( i=${#PIXEL_IDS[@]}-1; i>=0; i-- )); do
     local pid="${PIXEL_IDS[$i]}"
+    throttle_write
     if yac --base-url "$BASE_URL" pixels delete "$pid" >/dev/null 2>&1; then
       echo "  pixel $pid удалён"
     else
@@ -97,6 +115,8 @@ trap cleanup_all EXIT
 # и токен идут только на боевой Audience.
 LAST_OUT=""; LAST_RC=0
 run_json() {
+  # чтения (op = list) лимитом записи не считаются
+  case "${2:-}" in list) ;; *) throttle_write ;; esac
   LAST_OUT="$(yac --base-url "$BASE_URL" --output json "$@" 2>&1)"; LAST_RC=$?
   return 0
 }
@@ -186,9 +206,12 @@ make_data_file() {
 # is_api_error — был ли последний вывод ОТКЛОНЕНИЕМ API (а не сетевым сбоем/трейсбеком).
 # yac рендерит ошибки как "Ошибка: HTTP <код>: …" (отказ API) либо "Ошибка: Сетевая
 # ошибка: …" (транспорт). Засчитываем ожидаемой только первое — иначе обрыв сети дал бы
-# вакуумный PASS там, где запрос вообще не дошёл до API.
+# вакуумный PASS там, где запрос вообще не дошёл до API. 429 ИСКЛЮЧЁН: это не «ожидаемый
+# отказ домена», а голод по квоте (сбой троттлинга) — он обязан падать как FAIL, а не
+# маскироваться под PASS в expect_err/expect_any-фазах.
 is_api_error() {
   grep -q "HTTP [0-9]" <<<"$LAST_OUT" \
+    && ! grep -q "HTTP 429" <<<"$LAST_OUT" \
     && ! grep -q "Сетевая ошибка" <<<"$LAST_OUT" \
     && ! grep -q "Traceback" <<<"$LAST_OUT"
 }
