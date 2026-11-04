@@ -24,7 +24,7 @@ from .commands import pixels as pixels_cli
 from .commands import accounts as accounts_cli
 from .commands import delegates as delegates_cli
 
-__version__ = "0.1.0"
+__version__ = "0.0.1"
 
 app = typer.Typer(
     name="yac",
